@@ -2,6 +2,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# Install system dependencies including espeak-ng
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
@@ -10,13 +11,19 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     portaudio19-dev \
     curl \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Rust (needed for sudachipy)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+# Copy requirements file
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# Install Python dependencies with error checking
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install uvicorn
 
 COPY . .
 

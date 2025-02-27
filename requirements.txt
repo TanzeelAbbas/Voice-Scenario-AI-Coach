@@ -1,6 +1,6 @@
 gunicorn
 torch
-transformers
+transformers==4.38.2
 numpy
 sounddevice
 soundfile
