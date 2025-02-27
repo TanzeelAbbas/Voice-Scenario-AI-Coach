@@ -1,6 +1,6 @@
-# VoiceScenarioCoach
+# Voice Scenario AI Coach
 
-VoiceScenarioCoach is an interactive, voice-enabled AI application designed to guide users through workplace scenarios. Built with FastAPI, it simulates real-world situations (e.g., dealing with a micromanaging manager) by processing voice or text input and providing scenario-based coaching with audio responses. The project leverages advanced AI models for speech recognition, natural language processing, and text-to-speech synthesis.
+Voice Scenario Coach AI is an interactive, voice-enabled AI application designed to guide users through workplace scenarios. Built with FastAPI, it simulates real-world situations (e.g., dealing with a micromanaging manager) by processing voice or text input and providing scenario-based coaching with audio responses. The project leverages advanced AI models for speech recognition, natural language processing, and text-to-speech synthesis.
 
 ## Features
 - **Voice Interaction**: Record audio input via the browser, transcribe it, and receive spoken AI responses.
