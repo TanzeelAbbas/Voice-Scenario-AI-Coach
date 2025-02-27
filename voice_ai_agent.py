@@ -9,17 +9,14 @@ from TTS.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from langchain_google_genai import ChatGoogleGenerativeAI
-from dotenv import load_dotenv  
+import json
+import logging
+import re
 
-load_dotenv()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ScenarioVoiceAI:
-    """
-    A real-time voice AI agent that guides users through workplace scenarios,
-    processing audio input and responding with voice guidance based on scenario context.
-    """
-    
-    def __init__(self, scenario_data=None, api_key=None):
+    def __init__(self, scenario_input, api_key=None):
         self.running = False
         self.audio_queue = queue.Queue()
         self.processing_thread = None
@@ -35,14 +32,8 @@ class ScenarioVoiceAI:
             if not api_key:
                 raise ValueError("Google API key must be provided either directly or via GOOGLE_API_KEY environment variable")
         
-        # Load the scenario
-        self.scenario = scenario_data if scenario_data else self._load_default_scenario()
-        
-        # Initialize models
-        print("Initializing speech recognition model...")
-        self.speech_recognition = pipeline("automatic-speech-recognition", model="openai/whisper-base")
-        
-        print("Initializing Google Gemini language model via Langchain...")
+        # Initialize language model first
+        logging.info("Initializing Google Gemini language model via Langchain...")
         self.language_model = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             google_api_key=api_key,
@@ -52,187 +43,134 @@ class ScenarioVoiceAI:
             max_output_tokens=1024,
         )
         
-        print("Initializing text-to-speech model...")
+        # Process user-provided scenario input
+        self.scenario_text = scenario_input.strip()
+        if not self.scenario_text:
+            raise ValueError("Scenario input cannot be empty")
+        logging.info(f"Received scenario input: {self.scenario_text}")
+        self.scenario = self._interpret_scenario(self.scenario_text)
+        
+        logging.info("Initializing speech recognition model...")
+        self.speech_recognition = pipeline("automatic-speech-recognition", model="openai/whisper-base")
+        
+        logging.info("Initializing text-to-speech model...")
         self.tts = TTS("tts_models/en/vctk/vits") 
         
         # Audio recording parameters
         self.sample_rate = 16000
         self.recording_buffer = []
         self.silence_threshold = 0.02
-        self.silence_duration = 1.5  # seconds
-        self.min_speech_duration = 1.0  # seconds
+        self.silence_duration = 1.5
+        self.min_speech_duration = 1.0
         self.last_sound = time.time()
         self.speech_start_time = None
         
-        print("Scenario Voice AI initialized and ready!")
-    
-    def _load_default_scenario(self):
-        """Load the default scenario about navigating a micromanaging manager."""
-        return {
-            "title": "Navigating a Micromanaging Manager and Project Setbacks",
-            "learning_objectives": {
-                "primary_skill": "Effectively escalating concerns to a skip-level manager while maintaining professionalism and focusing on business impact.",
-                "secondary_skills": ["Active listening", "Strategic communication", "Problem-solving"],
-                "key_takeaways": "How to present concerns about management that focuses on business impact, how to demonstrate confidence in your value, and how to seek constructive solutions."
-            },
-            "background": "You are a project manager leading a critical initiative for your company, but you've been struggling with your direct manager's excessive micromanagement, which has led to team frustration and project delays. Your manager consistently questions every decision, interferes with the team's workflow, and has created an atmosphere of distrust. You've attempted to address these concerns with your manager directly, but they have been dismissive, and the behavior has intensified. You realize that you need to escalate your concerns to your skip-level manager to protect the project, your team, and your ability to do your job. You are committed to the success of this project and have been recognized for your previous work.",
-            "characters": {
-                "protagonist": {
-                    "name": "Sarah",
-                    "role": "Project Manager",
-                    "experience": "mid-career with 7+ years of experience",
-                    "goals": "Successfully complete the project, protect her team's morale, improve the work environment, and advance in her career."
-                },
-                "stakeholders": [
-                    {
-                        "name": "David",
-                        "role": "Direct Manager",
-                        "style": "Micromanaging, insecure, resistant to feedback",
-                        "motivations": "Maintaining control and avoiding blame"
-                    },
-                    {
-                        "name": "Emily",
-                        "role": "Skip-Level Manager",
-                        "style": "Results-oriented, values efficiency and team morale, but might be unaware of day-to-day issues with direct reports",
-                        "motivations": "Project success, maintaining a positive work environment, and overall company performance"
-                    }
-                ]
-            },
-            "initial_situation": "Sarah has just received feedback on a report from David that requires major changes to the work the team had completed in the past two days, which will push the project past the deadline and demoralize the team. David has also sent out an email questioning Sarah's decisions on the project. Sarah decides she needs to escalate this issue to Emily.",
-            "decision_points": [
-                {
-                    "id": "approaching_emily",
-                    "name": "Approaching Emily",
-                    "situation": "Sarah needs to decide how to approach Emily for a meeting.",
+        logging.info("Scenario Voice AI initialized with user-provided scenario!")
+
+    def _interpret_scenario(self, scenario_text):
+        """Interpret user input into a flexible scenario structure."""
+        try:
+            # Try parsing as JSON first
+            scenario = json.loads(scenario_text)
+            logging.info("Input parsed as JSON successfully")
+            # Minimal validation: Ensure it’s a dict with some content
+            if not isinstance(scenario, dict) or not scenario:
+                raise ValueError("JSON input must be a non-empty dictionary")
+            # Add defaults if key fields are missing
+            if "title" not in scenario:
+                scenario["title"] = "Custom Scenario"
+            if "background" not in scenario:
+                scenario["background"] = scenario_text[:100] + "..." if len(scenario_text) > 100 else scenario_text
+            if "initial_situation" not in scenario:
+                scenario["initial_situation"] = "User-defined situation begins here."
+            if "decision_points" not in scenario or not isinstance(scenario["decision_points"], list) or not scenario["decision_points"]:
+                scenario["decision_points"] = [{
+                    "id": "dp1",
+                    "name": "Initial Decision",
+                    "situation": "Decide how to proceed based on the scenario.",
                     "options": [
-                        {
-                            "id": "A",
-                            "text": "Send a brief email requesting a meeting to discuss the project and her manager's leadership.",
-                            "implications": "Allows for a professional and neutral beginning but might not convey the urgency."
-                        },
-                        {
-                            "id": "B",
-                            "text": "Send an email detailing all of the specific examples of David's behavior and request a meeting.",
-                            "implications": "Provides context to the issues but might be overwhelming and perceived as complaining rather than problem-solving."
-                        },
-                        {
-                            "id": "C",
-                            "text": "Walk into Emily's office to express her concerns immediately.",
-                            "implications": "Might convey urgency but is less professional, and it might put Emily on the defensive."
-                        }
+                        {"id": "A", "text": "Take action", "implications": "Proactive approach"},
+                        {"id": "B", "text": "Wait and see", "implications": "Less immediate effort"}
                     ],
                     "best_practice": "A",
-                    "best_practice_explanation": "This approach is professional, gives a heads-up to Emily about the topic, and gives her time to consider the issues."
-                },
-                {
-                    "id": "presenting_issues",
-                    "name": "Presenting Issues",
-                    "situation": "In the meeting with Emily, Sarah has to decide how to present the issues with David.",
-                    "options": [
-                        {
-                            "id": "A",
-                            "text": "Focus primarily on her personal frustrations and feelings of being micromanaged.",
-                            "implications": "Could be perceived as unprofessional and not focused on the business."
-                        },
-                        {
-                            "id": "B",
-                            "text": "Provide specific examples of David's actions and explain how they have negatively affected the team, morale, and project timelines.",
-                            "implications": "Demonstrates a focus on impact and the company and a desire to find solutions rather than complain."
-                        },
-                        {
-                            "id": "C",
-                            "text": "Briefly mention the issues and focus only on asking Emily to remove David from the project.",
-                            "implications": "Could be viewed as an attempt to avoid conflict or as lacking professionalism by not presenting clear examples of the problems."
-                        }
-                    ],
-                    "best_practice": "B",
-                    "best_practice_explanation": "This approach uses a business focus, shows that Sarah is not simply complaining, and demonstrates a clear understanding of the issues."
-                },
-                {
-                    "id": "response_and_recommendations",
-                    "name": "Response and Recommendations",
-                    "situation": "After explaining the situation, Sarah needs to decide how to respond to Emily's questions and how to present her recommendations for next steps.",
-                    "options": [
-                        {
-                            "id": "A",
-                            "text": "Agree to any suggestions and offer no recommendations of her own.",
-                            "implications": "Shows a lack of confidence and could lead to further problems."
-                        },
-                        {
-                            "id": "B",
-                            "text": "Defend her decisions, focus on the negative and dismiss any attempts by Emily to understand the problem from David's point of view.",
-                            "implications": "Could damage her credibility and prevent a positive solution."
-                        },
-                        {
-                            "id": "C",
-                            "text": "Listen carefully to Emily's response, ask clarifying questions, and present specific, actionable recommendations for moving forward.",
-                            "implications": "Demonstrates professionalism, confidence, and a commitment to finding constructive solutions."
-                        }
-                    ],
-                    "best_practice": "C",
-                    "best_practice_explanation": "This approach demonstrates active listening, openness to feedback, and a commitment to finding a solution."
+                    "best_practice_explanation": "Addresses the issue proactively."
+                }]
+            return scenario
+        except json.JSONDecodeError:
+            # Interpret paragraph or invalid JSON with AI
+            logging.info("Input is not JSON, interpreting as paragraph...")
+            prompt = f"""
+            Interpret this user-provided scenario text into a structured format for a workplace coaching AI:
+            "{scenario_text}"
+            Generate a JSON object with:
+            - title: A concise title based on the text
+            - background: A brief context summary
+            - initial_situation: The starting situation
+            - decision_points: At least one decision point with id, name, situation, options (id, text, implications), best_practice, and best_practice_explanation
+            If the text is unclear, make reasonable assumptions to create a usable scenario.
+            Return the JSON object as a valid JSON string. If you cannot generate a valid scenario, return a default JSON structure instead.
+            """
+            try:
+                response = self.language_model.invoke(prompt).content
+                logging.info(f"Raw model response: {response}")
+                # Attempt to extract JSON if embedded in text
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                    scenario = json.loads(json_str)
+                else:
+                    scenario = json.loads(response)  # Direct JSON parsing
+                return scenario
+            except Exception as e:
+                logging.error(f"Failed to interpret paragraph: {e}")
+                # Fallback scenario if interpretation fails
+                return {
+                    "title": "Generic Scenario",
+                    "background": scenario_text[:100] + "..." if len(scenario_text) > 100 else scenario_text,
+                    "initial_situation": "You’re facing a situation based on your input.",
+                    "decision_points": [{
+                        "id": "dp1",
+                        "name": "Initial Decision",
+                        "situation": "Decide how to proceed.",
+                        "options": [
+                            {"id": "A", "text": "Take initiative", "implications": "May resolve quickly"},
+                            {"id": "B", "text": "Seek advice", "implications": "May delay but informed choice"}
+                        ],
+                        "best_practice": "A",
+                        "best_practice_explanation": "Proactive steps often yield faster results."
+                    }]
                 }
-            ],
-            "key_lessons": [
-                "Focus on Business Impact: Frame your concerns in terms of how the manager's actions impact the project goals, team morale, and overall business objectives.",
-                "Unshakable Confidence: Express your concerns with confidence and clearly articulate how your skills are benefiting the company.",
-                "Propose Solutions: Always approach with a solution-oriented mindset by offering potential solutions rather than simply stating problems.",
-                "Active Listening: Pay close attention to how your audience responds and ask clarifying questions to understand their point of view."
-            ],
-            "critical_success_factors": [
-                "Maintaining a professional demeanor, even when expressing negative feedback.",
-                "Presenting concrete examples of the issues.",
-                "Being assertive but not aggressive."
-            ],
-            "common_mistakes": [
-                "Focusing solely on personal grievances.",
-                "Using generalizations or accusatory language.",
-                "Not being prepared to offer solutions.",
-                "Becoming defensive or dismissive during the meeting."
-            ]
-        }
-    
+
     def start(self):
-        """Start the scenario voice AI agent."""
         if self.running:
             print("Scenario Voice AI is already running.")
             return
-        
         self.running = True
         self.listening_thread = threading.Thread(target=self._listen_continuously)
         self.processing_thread = threading.Thread(target=self._process_audio_queue)
-        
         self.listening_thread.start()
         self.processing_thread.start()
-        
-        # Initial greeting and scenario introduction
-        introduction = f"Welcome to the scenario: {self.scenario['title']}. {self.scenario['background']} Let's start with the initial situation: {self.scenario['initial_situation']} Would you like me to present the first decision point?"
+        introduction = f"Welcome to your scenario: {self.scenario['title']}. {self.scenario['background']} Let's start with: {self.scenario['initial_situation']} Would you like me to present the first decision point?"
         print("Starting scenario with introduction...")
         self._speak(introduction)
-    
+
     def stop(self):
-        """Stop the scenario voice AI agent."""
         self.running = False
         if self.listening_thread:
             self.listening_thread.join(timeout=2)
         if self.processing_thread:
             self.processing_thread.join(timeout=2)
         print("Scenario Voice AI stopped.")
-    
+
     def _audio_callback(self, indata, frames, time_info, status):
-        """Callback for audio stream to collect audio data."""
         if status:
             print(f"Audio status: {status}")
-
         if indata is None or len(indata) == 0:
-            return  # Prevents processing empty data
-
+            return
         audio_data = indata.copy()
         volume_norm = np.linalg.norm(audio_data) / np.sqrt(len(audio_data))
-
-        if self.recording and frames % 160 == 0:  
+        if self.recording and frames % 160 == 0:
             print(f"Volume level: {volume_norm:.4f}")
-
         if volume_norm > self.silence_threshold:
             if not self.recording and not self.speaking:
                 print("Speech detected, starting recording...")
@@ -242,115 +180,83 @@ class ScenarioVoiceAI:
             elif self.recording:
                 self.last_sound = time.time()
                 self.recording_buffer.append(audio_data)
-
         elif self.recording:
             self.recording_buffer.append(audio_data)
-
             if time.time() - self.last_sound > self.silence_duration:
                 speech_duration = time.time() - self.speech_start_time
-
                 if speech_duration >= self.min_speech_duration:
                     print(f"Speech ended after {speech_duration:.2f} seconds, processing...")
                     audio_data = np.vstack(self.recording_buffer)
                     self.audio_queue.put(audio_data)
                 else:
                     print(f"Speech too short ({speech_duration:.2f}s), ignoring...")
-
                 self.recording = False
                 self.recording_buffer = []
-    
-    def _listen_continuously(self):
-        """Continuously listen for user input."""
-        print("Listening for user input...")
 
+    def _listen_continuously(self):
+        print("Listening for user input...")
         try:
             with sd.InputStream(
                 callback=self._audio_callback,
                 channels=1,
                 samplerate=self.sample_rate,
                 dtype="float32",
-                blocksize=0  # Let system determine best size
+                blocksize=0
             ):
                 while self.running:
-                    time.sleep(0.1)  # Prevent CPU overuse
+                    time.sleep(0.1)
         except Exception as e:
             print(f"Error in listening thread: {e}")
             self.running = False
-    
+
     def _process_audio_queue(self):
-        """Process audio data in the queue."""
         while self.running:
             try:
                 if not self.audio_queue.empty() and not self.speaking:
                     audio_data = self.audio_queue.get()
-                    
-                    # Convert audio to text
                     print("Transcribing speech...")
                     text = self._speech_to_text(audio_data)
                     if text and text.strip():
                         print(f"User said: {text}")
-                        
-                        # Add to conversation history
                         self.conversation_history.append({"role": "user", "content": text})
-                        
-                        # Generate response
                         print("Generating response...")
                         response = self._generate_response(text)
                         print(f"AI response: {response}")
-                        
-                        # Add AI response to history
                         self.conversation_history.append({"role": "assistant", "content": response})
-                        
-                        # Convert response to speech
                         self._speak(response)
                     else:
                         print("No speech detected or couldn't transcribe")
-                
-                time.sleep(0.1)  # Small sleep to prevent CPU overuse
+                time.sleep(0.1)
             except Exception as e:
                 print(f"Error in processing thread: {e}")
-    
+
     def _speech_to_text(self, audio_data):
-        """Convert speech to text using the speech recognition model."""
         try:
-            # Convert numpy array to the format expected by the model
             audio_array = audio_data.flatten().astype(np.float32)
-            
-            # Get transcription
             result = self.speech_recognition({"raw": audio_array, "sampling_rate": self.sample_rate})
             return result["text"]
         except Exception as e:
             print(f"Error in speech-to-text: {e}")
             return ""
-    
+
     def _generate_response(self, user_input):
-        """Generate a response based on the user input and the current scenario context."""
         try:
             user_input_lower = user_input.lower()
-            
-            # Check if the user is asking about the scenario or for help
-            if any(keyword in user_input_lower for keyword in ["scenario", "what's this about", "tell me more", "explain the scenario"]):
-                return f"We're working through the scenario: {self.scenario['title']}. {self.scenario['background']} The current situation is: {self.scenario['initial_situation']}"
-            
-            # Check if the user wants to move to or learn about a specific decision point
+            if "scenario" in user_input_lower or "what's this about" in user_input_lower:
+                return f"This is about: {self.scenario['title']}. {self.scenario['background']} The current situation is: {self.scenario['initial_situation']}"
             for point in self.scenario["decision_points"]:
-                if any(keyword in user_input_lower for keyword in [point["id"].lower(), point["name"].lower()]):
+                if point["id"].lower() in user_input_lower or point["name"].lower() in user_input_lower:
                     self.current_decision_point = point
                     options_text = "\n".join([f"Option {opt['id']}: {opt['text']}" for opt in point["options"]])
-                    return f"Let's focus on the {point['name']} decision. {point['situation']}\n\nYour options are:\n{options_text}\n\nWhich option would you choose? Or would you like me to explain any option in more detail?"
-            
-            # Check if the user is asking about the current options
-            if any(keyword in user_input_lower for keyword in ["options", "choices", "what can i do", "what are my options"]):
+                    return f"Let's focus on {point['name']}. {point['situation']}\n\nYour options are:\n{options_text}\n\nWhich option would you choose?"
+            if "options" in user_input_lower or "what can i do" in user_input_lower:
                 if self.current_decision_point:
                     options_text = "\n".join([f"Option {opt['id']}: {opt['text']}" for opt in self.current_decision_point["options"]])
-                    return f"For the {self.current_decision_point['name']} decision, your options are:\n{options_text}\n\nWhich option would you choose?"
+                    return f"For {self.current_decision_point['name']}, your options are:\n{options_text}\n\nWhich option would you choose?"
                 else:
-                    # Start with the first decision point if none is active
                     self.current_decision_point = self.scenario["decision_points"][0]
                     options_text = "\n".join([f"Option {opt['id']}: {opt['text']}" for opt in self.current_decision_point["options"]])
-                    return f"Let's start with the first decision: {self.current_decision_point['name']}. {self.current_decision_point['situation']}\n\nYour options are:\n{options_text}\n\nWhich option would you choose?"
-            
-            # Check if the user is making a choice
+                    return f"Starting with {self.current_decision_point['name']}. {self.current_decision_point['situation']}\n\nYour options are:\n{options_text}\n\nWhich option would you choose?"
             if self.current_decision_point:
                 for option in self.current_decision_point["options"]:
                     option_indicators = [
@@ -359,126 +265,79 @@ class ScenarioVoiceAI:
                         f"pick {option['id']}".lower(),
                         f"select {option['id']}".lower(),
                         f"go with {option['id']}".lower(),
-                        option['id'].lower()  
+                        option['id'].lower()
                     ]
-                    
                     if any(indicator in user_input_lower for indicator in option_indicators):
                         best_practice = self.current_decision_point["best_practice"]
                         best_practice_explanation = self.current_decision_point["best_practice_explanation"]
-                        
                         if option["id"] == best_practice:
-                            response = f"Great choice with Option {option['id']}! {option['implications']} This is indeed the best practice approach. {best_practice_explanation}"
+                            response = f"Great choice with Option {option['id']}! {option['implications']} This is indeed the best practice approach: {best_practice_explanation}"
                         else:
-                            # Find the best practice option
                             best_option = next((opt for opt in self.current_decision_point["options"] if opt["id"] == best_practice), None)
                             response = f"I understand your choice of Option {option['id']}. {option['implications']} However, Option {best_practice} ({best_option['text']}) is generally considered best practice because {best_practice_explanation}"
-                        
-                        # Move to the next decision point if available
                         current_index = next((i for i, point in enumerate(self.scenario["decision_points"]) if point["id"] == self.current_decision_point["id"]), -1)
                         if current_index < len(self.scenario["decision_points"]) - 1:
                             next_point = self.scenario["decision_points"][current_index + 1]
                             self.current_decision_point = next_point
-                            response += f"\n\nLet's move on to the next decision: {next_point['name']}. {next_point['situation']}\n\nYour options are:\n" + "\n".join([f"Option {opt['id']}: {opt['text']}" for opt in next_point["options"]])
+                            response += f"\n\nLet's move on to: {next_point['name']}. {next_point['situation']}\n\nYour options are:\n" + "\n".join([f"Option {opt['id']}: {opt['text']}" for opt in next_point["options"]])
                         else:
-                            # We've completed all decision points, provide summary
-                            key_lessons = "\n".join([f"• {lesson}" for lesson in self.scenario["key_lessons"]])
-                            response += f"\n\nYou've completed all the decision points in this scenario. Here are the key lessons:\n{key_lessons}\n\nWould you like to discuss any particular aspect of the scenario in more detail?"
+                            response += "\n\nYou've completed all decision points. What next?"
                             self.current_decision_point = None
-                        
                         return response
-            
-            # For more general questions or statements, use the language model with scenario context
-            # Prepare the context for the model
             scenario_context = f"""
-            Title: {self.scenario['title']}
-            
-            Background: {self.scenario['background']}
-            
-            Initial Situation: {self.scenario['initial_situation']}
-            
-            Character Profiles:
-            - Protagonist: {self.scenario['characters']['protagonist']['name']}, {self.scenario['characters']['protagonist']['role']}
-            - Stakeholders:
-              - {self.scenario['characters']['stakeholders'][0]['name']}, {self.scenario['characters']['stakeholders'][0]['role']}, {self.scenario['characters']['stakeholders'][0]['style']}
-              - {self.scenario['characters']['stakeholders'][1]['name']}, {self.scenario['characters']['stakeholders'][1]['role']}, {self.scenario['characters']['stakeholders'][1]['style']}
+            Title: {self.scenario.get('title', 'Custom Scenario')}
+            Background: {self.scenario.get('background', 'User-provided context')}
+            Initial Situation: {self.scenario.get('initial_situation', 'User-defined starting point')}
+            Decision Points: {json.dumps(self.scenario.get('decision_points', []), indent=2)}
             """
-            
-            # Add decision points if we're at a specific one
-            if self.current_decision_point:
-                scenario_context += f"\nCurrent Decision Point: {self.current_decision_point['name']}\n"
-                scenario_context += f"Situation: {self.current_decision_point['situation']}\n"
-                for option in self.current_decision_point["options"]:
-                    scenario_context += f"Option {option['id']}: {option['text']} - {option['implications']}\n"
-            
-            # Format recent conversation history
             recent_history = self.conversation_history[-5:] if len(self.conversation_history) > 5 else self.conversation_history
-            conversation_text = ""
-            for msg in recent_history:
-                role = "User" if msg["role"] == "user" else "AI Coach"
-                conversation_text += f"{role}: {msg['content']}\n\n"
-            
-            # Create the prompt
-            prompt = f"""You are an AI coach helping a user work through a workplace scenario about dealing with a micromanaging manager.
-            
+            conversation_text = "\n".join([f"{'User' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in recent_history])
+            prompt = f"""
+            You are an AI coach guiding a user through a custom workplace scenario.
             Scenario Context:
             {scenario_context}
-            
             Recent conversation:
             {conversation_text}
-            
-            The user just said: "{user_input}"
-            
-            Respond as a helpful coach guiding them through the scenario. Be conversational but focused on helping them understand the best practices for handling workplace situations. 
-            If they haven't made a clear decision and a decision point is active, guide them toward making a choice.
-            If they're asking about a specific aspect of workplace communication or management, provide practical advice.
-            Keep your response concise, empathetic, and actionable.
+            User said: "{user_input}"
+            Respond conversationally, guiding them through the scenario or answering their query.
+            If decision points exist and no choice is made, suggest options.
             """
-            
-            # Generate response from the language model
             response = self.language_model.invoke(prompt).content
             return response.strip()
-            
         except Exception as e:
-            print(f"Error in response generation: {e}")
-            return "I'm sorry, I couldn't generate a proper response. Could you please try again or ask another question about the scenario?"
-    
+            logging.error(f"Error in response generation: {e}")
+            return "Sorry, I couldn’t process that. Could you try again?"
+
     def _speak(self, text):
-        """Convert text to speech and play it."""
         try:
             print("Speaking response...")
             self.speaking = True
-            
-            # Generate speech
             wav_file = "temp_speech.wav"
             self.tts.tts_to_file(text=text, file_path=wav_file, speaker="p339")
-            
-            # Play the audio
             audio = AudioSegment.from_wav(wav_file)
             play(audio)
-            
-            # Clean up
             if os.path.exists(wav_file):
                 os.remove(wav_file)
-            
             self.speaking = False
             print("Done speaking, listening again...")
         except Exception as e:
             print(f"Error in text-to-speech: {e}")
             self.speaking = False
 
+    def _speak_to_file(self, text, file_path):
+        try:
+            self.tts.tts_to_file(text=text, file_path=file_path, speaker="p339")
+            return True
+        except Exception as e:
+            print(f"Error in text-to-speech: {e}")
+            return False
+
 def main():
-    """Main function to run the Scenario Voice AI."""
-    # Check for API key in environment
     api_key = os.environ.get("GOOGLE_API_KEY")
-    
     try:
-        # Initialize the agent with the micromanaging manager scenario
-        agent = ScenarioVoiceAI(api_key=api_key)
-        
-        # Start the agent
+        scenario_input = input("Enter your scenario (paragraph or JSON): ")
+        agent = ScenarioVoiceAI(scenario_input=scenario_input, api_key=api_key)
         agent.start()
-        
-        # Keep the main thread running
         print("Press Ctrl+C to stop the agent")
         while True:
             time.sleep(1)
