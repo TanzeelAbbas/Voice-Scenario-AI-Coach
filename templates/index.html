@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice AI Agent - Workplace Scenario Simulator</title>
+    <style>
+        /* Same styles as before */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f7f9;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h1 {
+            color: #2c3e50;
+        }
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        .conversation {
+            height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            border: 1px solid #e1e4e8;
+            border-radius: 5px;
+            padding: 10px;
+            background-color: #f8f9fa;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background-color: #d1ecf1;
+            margin-left: 20px;
+            border-left: 4px solid #0c5460;
+        }
+        .ai-message {
+            background-color: #e2e3e5;
+            margin-right: 20px;
+            border-left: 4px solid #383d41;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .button-row {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        .record-btn {
+            background-color: #dc3545;
+            color: white;
+            flex: 1;
+        }
+        .record-btn.recording {
+            background-color: #6c757d;
+        }
+        .send-btn {
+            background-color: #28a745;
+            color: white;
+            flex: 1;
+        }
+        .options-container {
+            margin-top: 20px;
+            border-top: 1px solid #dee2e6;
+            padding-top: 20px;
+        }
+        .option {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .option:hover {
+            background-color: #ced4da;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .connected {
+            background-color: #28a745;
+        }
+        .disconnected {
+            background-color: #dc3545;
+        }
+        .thinking {
+            background-color: #ffc107;
+        }
+        textarea {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            border: 1px solid #ced4da;
+            resize: none;
+            font-family: inherit;
+            font-size: 16px;
+        }
+        .scenario-info {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 4px solid #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Voice AI Agent - Workplace Scenario Simulator</h1>
+    </header>
+    
+    <div class="container">
+        <div class="scenario-info" id="scenario-info">
+            <h3>Loading Scenario...</h3>
+            <p>Please wait while we fetch the scenario details.</p>
+        </div>
+        
+        <div class="status-indicator">
+            <div class="indicator connected" id="status-light"></div>
+            <span id="status-text">Connected</span>
+        </div>
+        
+        <div class="conversation" id="conversation">
+            <!-- Initial message will be added after loading -->
+        </div>
+        
+        <div class="controls">
+            <textarea id="text-input" rows="3" placeholder="Type your message here or use voice input..."></textarea>
+            
+            <div class="button-row">
+                <button class="record-btn" id="record-btn">Start Voice Input</button>
+                <button class="send-btn" id="send-btn">Send Message</button>
+            </div>
+        </div>
+        
+        <div class="options-container" id="options-container">
+            <!-- Options will be dynamically inserted here when relevant -->
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', async function() {
+            const conversation = document.getElementById('conversation');
+            const textInput = document.getElementById('text-input');
+            const recordBtn = document.getElementById('record-btn');
+            const sendBtn = document.getElementById('send-btn');
+            const optionsContainer = document.getElementById('options-container');
+            const statusLight = document.getElementById('status-light');
+            const statusText = document.getElementById('status-text');
+            const scenarioInfo = document.getElementById('scenario-info');
+            
+            let isRecording = false;
+            let mediaRecorder;
+            let audioChunks = [];
+
+            // Load scenario and initial message on page load
+            async function loadInitialContent() {
+                try {
+                    // Load scenario
+                    const scenarioResponse = await fetch('/api/scenario');
+                    if (!scenarioResponse.ok) throw new Error('Failed to load scenario');
+                    const scenario = await scenarioResponse.json();
+                    scenarioInfo.innerHTML = `
+                        <h3>Current Scenario: ${scenario.title}</h3>
+                        <p>${scenario.background}</p>
+                    `;
+
+                    // Load initial message with audio
+                    const initialResponse = await fetch('/api/initial-message');
+                    if (!initialResponse.ok) throw new Error('Failed to load initial message');
+                    const initialData = await initialResponse.json();
+                    addAIMessage(initialData.response, initialData.audio);
+                } catch (error) {
+                    console.error('Error loading initial content:', error);
+                    statusLight.className = 'indicator disconnected';
+                    statusText.textContent = 'Disconnected';
+                    scenarioInfo.innerHTML = '<h3>Error</h3><p>Could not load scenario. Please refresh the page.</p>';
+                }
+            }
+
+            await loadInitialContent();
+
+            // Voice recording functionality
+            recordBtn.addEventListener('click', async () => {
+                if (!isRecording) {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                        
+                        mediaRecorder.ondataavailable = event => {
+                            audioChunks.push(event.data);
+                        };
+                        
+                        mediaRecorder.onstop = async () => {
+                            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                            audioChunks = [];
+                            await processVoiceInput(audioBlob);
+                            stream.getTracks().forEach(track => track.stop());
+                        };
+                        
+                        audioChunks = [];
+                        mediaRecorder.start();
+                        isRecording = true;
+                        recordBtn.textContent = 'Stop Recording';
+                        recordBtn.classList.add('recording');
+                        statusLight.className = 'indicator thinking';
+                        statusText.textContent = 'Listening...';
+                    } catch (err) {
+                        console.error('Error accessing microphone:', err);
+                        alert('Could not access microphone. Please check permissions.');
+                    }
+                } else {
+                    mediaRecorder.stop();
+                    isRecording = false;
+                    recordBtn.textContent = 'Start Voice Input';
+                    recordBtn.classList.remove('recording');
+                }
+            });
+            
+            // Send message functionality
+            sendBtn.addEventListener('click', async () => {
+                const message = textInput.value.trim();
+                if (message) {
+                    addUserMessage(message);
+                    await processTextInput(message);
+                    textInput.value = '';
+                }
+            });
+            
+            // Allow Enter key to send messages
+            textInput.addEventListener('keydown', async (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendBtn.click();
+                }
+            });
+            
+            // Add user message to conversation
+            function addUserMessage(message) {
+                const messageDiv = document.createElement('div');
+                messageDiv.classList.add('message', 'user-message');
+                messageDiv.textContent = message;
+                conversation.appendChild(messageDiv);
+                conversation.scrollTop = conversation.scrollHeight;
+            }
+            
+            // Add AI message to conversation with audio playback
+            function addAIMessage(message, audioBase64) {
+                statusLight.className = 'indicator thinking';
+                statusText.textContent = 'Processing...';
+                
+                setTimeout(() => {
+                    const messageDiv = document.createElement('div');
+                    messageDiv.classList.add('message', 'ai-message');
+                    messageDiv.textContent = message;
+                    conversation.appendChild(messageDiv);
+                    conversation.scrollTop = conversation.scrollHeight;
+                    
+                    if (audioBase64) {
+                        const audio = new Audio(`data:audio/wav;base64,${audioBase64}`);
+                        audio.play().catch(err => console.error('Error playing audio:', err));
+                    }
+                    
+                    statusLight.className = 'indicator connected';
+                    statusText.textContent = 'Connected';
+                    extractOptionsFromResponse(message);
+                }, 500);
+            }
+            
+            // Process voice input via API
+            async function processVoiceInput(audioBlob) {
+                statusText.textContent = 'Processing voice...';
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'input.webm');
+                
+                try {
+                    const response = await fetch('/api/process-voice', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    if (!response.ok) throw new Error('Failed to process voice');
+                    const data = await response.json();
+                    addUserMessage(data.text);
+                    addAIMessage(data.response, data.audio);
+                } catch (error) {
+                    console.error('Error processing voice:', error);
+                    statusLight.className = 'indicator disconnected';
+                    statusText.textContent = 'Error processing voice';
+                }
+            }
+            
+            // Process text input via API
+            async function processTextInput(message) {
+                statusText.textContent = 'Generating response...';
+                try {
+                    const response = await fetch('/api/process-text', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: message })
+                    });
+                    if (!response.ok) throw new Error('Failed to process text');
+                    const data = await response.json();
+                    addAIMessage(data.response, data.audio);
+                } catch (error) {
+                    console.error('Error processing text:', error);
+                    statusLight.className = 'indicator disconnected';
+                    statusText.textContent = 'Error processing text';
+                }
+            }
+            
+            // Extract and display options from AI response
+            function extractOptionsFromResponse(response) {
+                optionsContainer.innerHTML = '';
+                const lines = response.split('\n');
+                let inOptionsSection = false;
+                
+                lines.forEach(line => {
+                    if (line.toLowerCase().includes('your options are:')) {
+                        inOptionsSection = true;
+                        return;
+                    }
+                    if (inOptionsSection && line.trim() === '') {
+                        inOptionsSection = false;
+                        return;
+                    }
+                    if (inOptionsSection && line.startsWith('Option ')) {
+                        const optionText = line.replace(/^Option ([A-C]): /i, '');
+                        const optionId = line.match(/^Option ([A-C]):/i)?.[1];
+                        if (optionId) {
+                            const optionDiv = document.createElement('div');
+                            optionDiv.classList.add('option');
+                            optionDiv.innerHTML = `<strong>Option ${optionId}:</strong> ${optionText}`;
+                            optionDiv.addEventListener('click', () => {
+                                const choice = `Option ${optionId}`;
+                                addUserMessage(choice);
+                                processTextInput(choice);
+                            });
+                            optionsContainer.appendChild(optionDiv);
+                        }
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
